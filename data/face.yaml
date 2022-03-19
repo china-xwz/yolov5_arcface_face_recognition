@@ -1,0 +1,6 @@
+train: /media/system/dataset/CelebA/Img/images/train
+val: /media/system/dataset/CelebA/Img/images/train
+# number of classes
+nc: 1
+# class names
+names: ['face']

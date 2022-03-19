@@ -157,6 +157,14 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
+                    print(*xyxy, conf, cls)
+
+                    face_img = im0[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2])]  # 裁剪侦测到的人脸部分
+                    face_img = cv2.resize(face_img, (128, 128))  # 缩放至128*128
+                    face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+                    cv2.imshow("123", face_img)
+                    cv2.waitKey()
+
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
