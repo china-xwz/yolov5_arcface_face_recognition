@@ -1,0 +1,304 @@
+import torch
+from PIL import Image
+from PyQt5 import QtWidgets, QtGui, QtCore
+from PyQt5.QtGui import QPixmap, QImage
+
+from PyQt5.QtWidgets import QMessageBox, QTableWidgetItem
+from cv2 import cv2
+from torch.backends import cudnn
+import torch.nn as nn
+import numpy as np
+from face_detect import Ui_Form
+import sys
+
+from models.common import DetectMultiBackend
+from utils.datasets import IMG_FORMATS, VID_FORMATS, LoadImages, LoadStreams
+from utils.general import (LOGGER, check_file, check_img_size, check_imshow, check_requirements, colorstr,
+                           increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xyxy2xywh)
+from utils.plots import Annotator, colors, save_one_box
+from utils.torch_utils import select_device, time_sync
+
+import os
+from pathlib import Path
+
+from model_face import FaceMobileNet
+from config import config as conf
+
+
+
+import torchvision.transforms as T
+
+transform = T.Compose([
+    T.Grayscale(),
+    T.Resize([128, 128]),
+    T.ToTensor(),
+    T.Normalize(mean=[0.5], std=[0.5]), ])
+
+
+class MainWindow(QtWidgets.QWidget, Ui_Form):
+    def __init__(self):
+        super(MainWindow, self).__init__()
+        self.setupUi(self)
+
+        self.init()
+
+    def init(self):
+        """初始化"""
+        self.setWindowTitle("人脸检测")
+
+        # 参数
+        self.output_size = 480
+        self.img2predict = ""
+        self.video_detect = False
+
+        self.label_image.setVisible(True)
+        self.label_image.setScaledContents(True)
+
+        # 初始界面图片
+        init_img = "images/li.jpg"
+        self.img2predict = init_img
+        test_img = QPixmap(init_img)
+        self.label_image.setFixedSize(test_img.size())
+        self.label_image.setPixmap(test_img)
+
+        # 信号槽绑定
+        self.pushButton_openimg.clicked.connect(self.open_img)
+        self.pushButton_choose_model.clicked.connect(self.load_model)
+        self.pushButton_detect.clicked.connect(self.detect_img)
+
+        # 初始化模型
+        self.device = select_device()
+        self.model = DetectMultiBackend("best.pt", device=self.device, dnn=False)
+
+        self.model_face = FaceMobileNet(conf.embedding_size).to(self.device)
+        self.model_face = nn.DataParallel(self.model_face)
+        self.model_face.load_state_dict(torch.load(conf.test_model, map_location=conf.device))
+        self.model_face.eval()
+
+
+        # 加载图片数据库
+        self.path_name = "E:\DeepLearning\projects\yolov5_face\image_db"
+        self.features = []
+        self.labels = []
+        self.read_path(self.path_name)
+
+    ############################################################################################
+    #
+    #   加载yolov5训练好的模型
+    #
+    ############################################################################################
+
+    def load_model(self):
+        modelName, modelType = QtWidgets.QFileDialog.getOpenFileName(self, "选取文件", os.path.join(os.getcwd(), "weights"),
+                                                                     "All Files(*);;*.pt *.pth")
+
+        self.model = DetectMultiBackend(modelName, device=self.device, dnn=False)
+        print("模型加载完成")
+        return modelName
+
+    ############################################################################################
+    #
+    #   打开图片
+    #
+    ############################################################################################
+
+    def open_img(self):
+        # 打开图片文件
+        imgName, fileType = QtWidgets.QFileDialog.getOpenFileName(self, "选取文件", os.path.join(os.getcwd(), "images"),
+                                                                  "All Files(*);;*.jpg *.png *.tif *.jpeg")
+        print("打开图片：", imgName)
+        self.img2predict = imgName
+        img = QPixmap(imgName)
+        self.label_image.setFixedSize(img.size())
+        self.label_image.setPixmap(img)
+
+
+
+    def read_path(self, path_name):
+        for dir_item in os.listdir(path_name):
+            # 从初始路径开始叠加，合并成可识别的操作路径
+            full_path = os.path.abspath(os.path.join(path_name, dir_item))
+
+            if os.path.isdir(full_path):  # 如果是文件夹，继续递归调用
+                self.read_path(full_path)
+            else:  # 文件
+                if dir_item.endswith('.jpg'):
+                    image = Image.open(full_path)
+                    image = transform(image)
+                    image = image.unsqueeze(0)
+                    with torch.no_grad():
+                        feature = self.model_face(image).squeeze().cpu().numpy()
+
+                    self.features.append(feature)
+                    label = path_name.split('\\')[-1]
+                    self.labels.append(label)
+
+
+    def cosin_metric(self, x1, x2):
+        return np.dot(x1, x2) / (np.linalg.norm(x1) * np.linalg.norm(x2))
+
+    ############################################################################################
+    #
+    #   开启检测
+    #
+    ############################################################################################
+
+    def detect_img(self):
+        device = self.device
+        model = self.model
+        output_size = self.output_size
+        source = self.img2predict  # file/dir/URL/glob, 0 for webcam
+        imgsz = [640, 640]  # inference size (pixels)
+        conf_thres = 0.25  # confidence threshold
+        iou_thres = 0.45  # NMS IOU threshold
+        max_det = 1000  # maximum detections per image
+        view_img = False  # show results
+        save_txt = False  # save results to *.txt
+        save_conf = False  # save confidences in --save-txt labels
+        save_crop = False  # save cropped prediction boxes
+        nosave = False  # do not save images/videos
+        classes = None  # filter by class: --class 0, or --class 0 2 3
+        agnostic_nms = False  # class-agnostic NMS
+        augment = False  # ugmented inference
+        visualize = False  # visualize features
+        line_thickness = 3  # bounding box thickness (pixels)
+        hide_labels = False  # hide labels
+        hide_conf = False  # hide confidences
+        half = False  # use FP16 half-precision inference
+        dnn = False  # use OpenCV DNN for ONNX inference
+        tmp_dir = "images/tmp"
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir)
+        print(f"开始检测图片：{source}")
+        if source == "":
+            QMessageBox.warning(self, "请上传", "请先上传图片再进行检测")
+        else:
+            source = str(source)
+            webcam = False
+            stride, names, pt, jit, onnx = model.stride, model.names, model.pt, model.jit, model.onnx
+            imgsz = check_img_size(imgsz, s=stride)  # check image size
+            save_img = not nosave and not source.endswith('.txt')  # save inference images
+            # Dataloader
+            if webcam:
+                view_img = check_imshow()
+                cudnn.benchmark = True  # set True to speed up constant image size inference
+                dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt and not jit)
+                bs = len(dataset)  # batch_size
+            else:
+                dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt and not jit)
+                bs = 1  # batch_size
+            vid_path, vid_writer = [None] * bs, [None] * bs
+            # Run inference
+            if pt and device.type != 'cpu':
+                model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.model.parameters())))  # warmup
+            dt, seen = [0.0, 0.0, 0.0], 0
+            for path, im, im0s, vid_cap, s in dataset:
+                t1 = time_sync()
+                im = torch.from_numpy(im).to(device)
+                im = im.half() if half else im.float()  # uint8 to fp16/32
+                im /= 255  # 0 - 255 to 0.0 - 1.0
+                if len(im.shape) == 3:
+                    im = im[None]  # expand for batch dim
+                t2 = time_sync()
+                dt[0] += t2 - t1
+                # Inference
+                # visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+                pred = model(im, augment=augment, visualize=visualize)
+                t3 = time_sync()
+                dt[1] += t3 - t2
+                # NMS
+                pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+                dt[2] += time_sync() - t3
+                # Second-stage classifier (optional)
+                # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
+                # Process predictions
+                for i, det in enumerate(pred):  # per image
+                    seen += 1
+                    if webcam:  # batch_size >= 1
+                        p, im0, frame = path[i], im0s[i].copy(), dataset.count
+                        s += f'{i}: '
+                    else:
+                        p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
+                    p = Path(p)  # to Path
+                    s += '%gx%g ' % im.shape[2:]  # print string
+                    gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+                    imc = im0.copy() if save_crop else im0  # for save_crop
+                    annotator = Annotator(im0, line_width=line_thickness, example=str(names))
+                    if len(det):
+                        # Rescale boxes from img_size to im0 size
+                        det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
+
+                        # Print results
+                        for _, c in enumerate(det[:, -1].unique()):
+                            # 显示检测结果
+                            n = (det[:, -1] == c).sum()  # detections per class
+                            s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+
+                        # Write results
+                        for *xyxy, conf, cls in reversed(det):
+
+                            face_img = im0[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2])]
+                            face_img = cv2.resize(face_img, (128, 128))  # 缩放至128*128
+                            face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+                            face_img = torch.Tensor(face_img).unsqueeze(0)
+                            face_img -= 127.5
+                            face_img /= 127.5
+                            face_img = T.Normalize(mean=[0.5], std=[0.5])(face_img)
+                            face_img = face_img.unsqueeze(0).to(device)
+                            print(face_img.shape)
+                            with torch.no_grad():
+                                fea = self.model_face(face_img).squeeze().cpu().numpy()
+
+                            best_score = 0.3
+                            label = None
+                            for i, feature in enumerate(self.features):
+                                score = self.cosin_metric(fea, feature)
+                                if score > best_score:
+                                    best_score = score
+                                    label = self.labels[i]
+                            print(best_score, label)
+
+                            # face_data = face_data.to(device)
+
+                            # with torch.no_grad():
+                            #     feature = model(face_img).squeeze().cpu().numpy()
+                            # print(feature)
+
+                            if save_txt:  # Write to file
+                                xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(
+                                    -1).tolist()  # normalized xywh
+                                line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+                                # with open(txt_path + '.txt', 'a') as f:
+                                #     f.write(('%g ' * len(line)).rstrip() % line + '\n')
+
+                            if save_img or save_crop or view_img:  # Add bbox to image
+                                c = int(cls)  # integer class
+                                # label_ = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
+                                label_ = f"{label}:{best_score:.2f}"
+                                annotator.box_label(xyxy, label_, color=colors(c, True))
+                                # if save_crop:
+                                #     save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg',
+                                #                  BGR=True)
+                    # Print time (inference-only)
+                    LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
+
+                    # Stream results
+                    im0 = annotator.result()
+                    if view_img:
+                        cv2.imshow(str(p), im0)
+                        cv2.waitKey(1)  # 1 millisecond
+                    # Save results (image with detections)
+                    resize_scale = output_size / im0.shape[0]
+                    im0 = cv2.resize(im0, (0, 0), fx=resize_scale, fy=resize_scale)
+                    tmp_imgpath = os.path.join(tmp_dir, "single_result.jpg")
+                    cv2.imwrite(tmp_imgpath, im0)
+                    img = QPixmap(tmp_imgpath)
+                    # self.label_image.setFixedSize(img.size())
+                    self.label_image.setPixmap(QPixmap(img))
+
+
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    myshow = MainWindow()
+    myshow.show()
+    sys.exit(app.exec_())
