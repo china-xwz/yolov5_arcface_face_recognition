@@ -112,7 +112,11 @@ class MainWindow(QtWidgets.QWidget, Ui_Form):
         self.label_image.setFixedSize(img.size())
         self.label_image.setPixmap(img)
 
-
+    ############################################################################################
+    #
+    #   加载数据库
+    #
+    ############################################################################################
 
     def read_path(self, path_name):
         for dir_item in os.listdir(path_name):
@@ -243,13 +247,12 @@ class MainWindow(QtWidgets.QWidget, Ui_Form):
                             face_img = torch.Tensor(face_img).unsqueeze(0)
                             face_img -= 127.5
                             face_img /= 127.5
-                            face_img = T.Normalize(mean=[0.5], std=[0.5])(face_img)
+                            # face_img = T.Normalize(mean=[0.5], std=[0.5])(face_img)
                             face_img = face_img.unsqueeze(0).to(device)
-                            print(face_img.shape)
                             with torch.no_grad():
                                 fea = self.model_face(face_img).squeeze().cpu().numpy()
 
-                            best_score = 0.3
+                            best_score = 0.33
                             label = None
                             for i, feature in enumerate(self.features):
                                 score = self.cosin_metric(fea, feature)
@@ -257,12 +260,6 @@ class MainWindow(QtWidgets.QWidget, Ui_Form):
                                     best_score = score
                                     label = self.labels[i]
                             print(best_score, label)
-
-                            # face_data = face_data.to(device)
-
-                            # with torch.no_grad():
-                            #     feature = model(face_img).squeeze().cpu().numpy()
-                            # print(feature)
 
                             if save_txt:  # Write to file
                                 xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(
