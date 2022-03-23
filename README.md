@@ -13,3 +13,6 @@
 [https://github.com/ultralytics/yolov5](https://github.com/ultralytics/yolov5)
 
 [https://github.com/siriusdemon/Build-Your-Own-Face-Model](https://github.com/siriusdemon/Build-Your-Own-Face-Model)
+
+qq:1679509305
+vx:zzm17864296700
